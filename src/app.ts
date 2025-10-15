@@ -22,8 +22,8 @@ import requestIp from "request-ip";
 
 const app = express();
 
-// ✅ Health check route to fix GET / 404 on Render
-app.get("/", (req: Request, res: Response) => {
+// ✅ Health check route
+app.get("/", (_req: Request, res: Response) => {
   res.status(200).send("✅ ZenChat Backend is Running Successfully on Render!");
 });
 
@@ -49,15 +49,17 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// ✅ Convert CORS URLs into a valid array
+const allowedOrigins: string[] = Array.isArray(corsUrl)
+  ? [...corsUrl, "https://zenchat-frontend.onrender.com"]
+  : [corsUrl, "https://zenchat-frontend.onrender.com"];
+
 // ✅ Basic middlewares
 app.use(express.json({ limit: "16kb" }));
 app.use(express.urlencoded({ extended: true, limit: "16kb" }));
 app.use(
   cors({
-    origin: [
-      corsUrl,
-      "https://zenchat-frontend.onrender.com", // Allow frontend hosted on Render
-    ],
+    origin: allowedOrigins,
     credentials: true,
   })
 );
@@ -65,28 +67,26 @@ app.use(morgan("dev"));
 app.use(cookieParser());
 
 // ✅ API routes
-app.get("/health", (req, res) => res.send("healthy running"));
+app.get("/health", (_req, res) => res.send("healthy running"));
 app.use("/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/messages", messageRoutes);
 
-// ✅ Static files (public)
+// ✅ Serve static files
 app.use("/public", express.static(path.join(__dirname, "..", "public")));
 
 // ✅ Create HTTP + Socket.IO server
 const httpServer = createServer(app);
+
 const io = new SocketServer(httpServer, {
   pingTimeout: 60000,
   cors: {
-    origin: [
-      corsUrl,
-      "https://zenchat-frontend.onrender.com",
-    ],
+    origin: allowedOrigins,
     credentials: true,
   },
 });
 
-// Initialize sockets
+// ✅ Initialize sockets
 initSocketIo(io);
 app.set("io", io);
 
@@ -107,5 +107,5 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   }
 });
 
-// ✅ Export HTTP server for external use
+// ✅ Export the HTTP server
 export default httpServer;
