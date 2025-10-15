@@ -4,7 +4,7 @@ import { corsUrl, environment } from "./config";
 import authRoutes from "./routes/user.routes";
 import chatRoutes from "./routes/chat.routes";
 import messageRoutes from "./routes/message.routes";
-import "./database"; // initialize database
+import "./database";
 import {
   ApiError,
   ErrorType,
@@ -22,17 +22,17 @@ import requestIp from "request-ip";
 
 const app = express();
 
-// ✅ Health check route
+// ✅ Health check
 app.get("/", (_req: Request, res: Response) => {
   res.status(200).send("✅ ZenChat Backend is Running Successfully on Render!");
 });
 
-// ✅ Middleware: client IP tracking
+// ✅ Client IP middleware
 app.use(requestIp.mw());
 
 // ✅ Rate limiter
 const limiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
+  windowMs: 1 * 60 * 1000, // 1 min
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
@@ -40,7 +40,7 @@ const limiter = rateLimit({
   handler: (_req, _res, next, options) => {
     next(
       new RateLimitError(
-        `You exceeded the request limit. Allowed ${options.max} requests per ${
+        `Too many requests. Limit ${options.max} per ${
           options.windowMs / 60000
         } minute.`
       )
@@ -49,12 +49,11 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// ✅ Convert CORS URLs into a valid array
+// ✅ Allowed CORS origins
 const allowedOrigins: string[] = Array.isArray(corsUrl)
   ? [...corsUrl, "https://zenchat-frontend.onrender.com"]
   : [corsUrl, "https://zenchat-frontend.onrender.com"];
 
-// ✅ Basic middlewares
 app.use(express.json({ limit: "16kb" }));
 app.use(express.urlencoded({ extended: true, limit: "16kb" }));
 app.use(
@@ -66,16 +65,16 @@ app.use(
 app.use(morgan("dev"));
 app.use(cookieParser());
 
-// ✅ API routes
+// ✅ API Routes
 app.get("/health", (_req, res) => res.send("healthy running"));
 app.use("/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/messages", messageRoutes);
 
-// ✅ Serve static files
+// ✅ Static files
 app.use("/public", express.static(path.join(__dirname, "..", "public")));
 
-// ✅ Create HTTP + Socket.IO server
+// ✅ HTTP + Socket.IO
 const httpServer = createServer(app);
 
 const io = new SocketServer(httpServer, {
@@ -86,26 +85,24 @@ const io = new SocketServer(httpServer, {
   },
 });
 
-// ✅ Initialize sockets
 initSocketIo(io);
 app.set("io", io);
 
-// ✅ Global error handler
+// ✅ Global Error Handler
 app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof ApiError) {
     ApiError.handle(err, res);
     if (err.type === ErrorType.INTERNAL)
       console.error(
-        `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}\nError Stack: ${err.stack}`
+        `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}\n${err.stack}`
       );
   } else {
     console.error(
-      `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}\nError Stack: ${err.stack}`
+      `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}\n${err.stack}`
     );
     if (environment === "development") return res.status(500).send(err.stack);
     ApiError.handle(new InternalError(), res);
   }
 });
 
-// ✅ Export the HTTP server
 export default httpServer;
