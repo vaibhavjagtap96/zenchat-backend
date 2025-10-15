@@ -13,31 +13,31 @@ import {
 } from "./core/ApiError";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
-import { createServer, Server as HttpServer } from "http";
+import { createServer } from "http";
 import { Server as SocketServer } from "socket.io";
-import { initSocketIo, emitSocketEvent } from "./socket";
+import { initSocketIo } from "./socket";
 import path from "path";
-import { RateLimitRequestHandler, rateLimit } from "express-rate-limit";
+import { rateLimit } from "express-rate-limit";
 import requestIp from "request-ip";
 
 const app = express();
 
-// creation of http server
-const httpServer = createServer(app);
+// ✅ Health check route to fix GET / 404 on Render
+app.get("/", (req: Request, res: Response) => {
+  res.status(200).send("✅ ZenChat Backend is Running Successfully on Render!");
+});
 
-// middleware to get the ip of client from the request
+// ✅ Middleware: client IP tracking
 app.use(requestIp.mw());
 
-// Adding a rate limiter to the server
-const limiter: RateLimitRequestHandler = rateLimit({
+// ✅ Rate limiter
+const limiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 200, // Limit each IP to 200 requests per windowMs
-  standardHeaders: true, // Return rate limit info in the 'RateLimit-*' headers
-  legacyHeaders: false, // Disable the 'X-RateLimit-*' headers which were used before
-  keyGenerator: (req: Request, _: Response): string => {
-    return requestIp.getClientIp(req) || ""; // Return the IP address of the client
-  },
-  handler: (req: Request, res: Response, next: NextFunction, options) => {
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => requestIp.getClientIp(req) || "",
+  handler: (_req, _res, next, options) => {
     next(
       new RateLimitError(
         `You exceeded the request limit. Allowed ${options.max} requests per ${
@@ -47,75 +47,65 @@ const limiter: RateLimitRequestHandler = rateLimit({
     );
   },
 });
-
-// Apply  the rate limiter to all routes
 app.use(limiter);
 
-// express app middlewares
+// ✅ Basic middlewares
 app.use(express.json({ limit: "16kb" }));
 app.use(express.urlencoded({ extended: true, limit: "16kb" }));
 app.use(
   cors({
-    origin: corsUrl,
-    optionsSuccessStatus: 200,
+    origin: [
+      corsUrl,
+      "https://zenchat-frontend.onrender.com", // Allow frontend hosted on Render
+    ],
     credentials: true,
   })
 );
 app.use(morgan("dev"));
 app.use(cookieParser());
 
-// HEALTH CHECK ROUTE
-app.get("/health", (req, res) => {
-  res.send("healthy running");
-});
-
-// auth Routes
+// ✅ API routes
+app.get("/health", (req, res) => res.send("healthy running"));
 app.use("/auth", authRoutes);
-
-// chat Routes
 app.use("/api/chat", chatRoutes);
-
-// message Routes
 app.use("/api/messages", messageRoutes);
 
-// create a static route to serve static images
+// ✅ Static files (public)
 app.use("/public", express.static(path.join(__dirname, "..", "public")));
 
-// creating a socket server
+// ✅ Create HTTP + Socket.IO server
+const httpServer = createServer(app);
 const io = new SocketServer(httpServer, {
   pingTimeout: 60000,
   cors: {
-    origin: corsUrl,
+    origin: [
+      corsUrl,
+      "https://zenchat-frontend.onrender.com",
+    ],
     credentials: true,
   },
 });
 
-// initialize the socker server
+// Initialize sockets
 initSocketIo(io);
+app.set("io", io);
 
-app.set("io", io); // using set method to mount 'io' instance on app
-
-// middleware error handlers
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+// ✅ Global error handler
+app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof ApiError) {
     ApiError.handle(err, res);
     if (err.type === ErrorType.INTERNAL)
       console.error(
-        `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}` +
-          "\n" +
-          `Error Stack: ${err.stack}`
+        `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}\nError Stack: ${err.stack}`
       );
   } else {
     console.error(
-      `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}` +
-        "\n" +
-        `Error Stack: ${err.stack}`
+      `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}\nError Stack: ${err.stack}`
     );
-    if (environment === "development") {
-      return res.status(500).send(err.stack);
-    }
+    if (environment === "development") return res.status(500).send(err.stack);
     ApiError.handle(new InternalError(), res);
   }
 });
 
+// ✅ Export HTTP server for external use
 export default httpServer;
