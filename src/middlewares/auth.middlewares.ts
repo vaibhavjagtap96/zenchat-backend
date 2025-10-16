@@ -11,8 +11,8 @@ import { Types } from "mongoose";
 import { ProtectedRequest } from "../types/app-request";
 import { Response, NextFunction } from "express";
 
-export const verifyJWT = asyncHandler(
-  async (req: ProtectedRequest, res: Response, next: NextFunction) => {
+export const verifyJWT = asyncHandler<ProtectedRequest>(
+  async (req, res, next) => {
     const token =
       req.cookies?.accessToken ||
       req.header("Authorization")?.replace("Bearer ", "");
@@ -24,15 +24,14 @@ export const verifyJWT = asyncHandler(
     try {
       const decodedToken = await JWT.decodeToken(token);
       const userData = await userRepo.findById(
-        new Types.ObjectId(decodedToken.sub) // get the user details by passing userId(sub) from decoded token
+        new Types.ObjectId(decodedToken.sub)
       );
 
       if (!userData) {
-        throw new AuthFailureError();
+        throw new AuthFailureError("User not found");
       }
 
       req.user = userData;
-
       next();
     } catch (error) {
       if (error instanceof TokenExpiredError)

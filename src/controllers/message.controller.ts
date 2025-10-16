@@ -1,16 +1,9 @@
-import { ProtectedRequest } from "../types/app-request";
-import {
-  AuthFailureError,
-  BadRequestError,
-  InternalError,
-  NotFoundError,
-} from "../core/ApiError";
-import { SuccessMsgResponse, SuccessResponse } from "../core/ApiResponse";
+// controllers/message.controller.ts
 import { Request, Response } from "express";
 import { Types } from "mongoose";
+import asyncHandler from "../helpers/asyncHandler";
 import chatRepo from "../database/repositories/chatRepo";
 import messageRepo from "../database/repositories/messageRepo";
-import asyncHandler from "../helpers/asyncHandler";
 import {
   getLocalFilePath,
   getStaticFilePath,
@@ -19,11 +12,31 @@ import {
 import { emitSocketEvent } from "../socket";
 import { ChatEventEnum } from "../constants";
 import Chat from "../database/model/Chat";
+import { ProtectedRequest } from "../types/app-request";
+import {
+  AuthFailureError,
+  BadRequestError,
+  InternalError,
+  NotFoundError,
+} from "../core/ApiError";
+import { SuccessMsgResponse, SuccessResponse } from "../core/ApiResponse";
 
+/**
+ * Helper to safely extract ProtectedRequest.user
+ */
+function getProtectedUser(req: Request) {
+  return (req as ProtectedRequest).user;
+}
+
+/**
+ * Get all messages of a chat (aggregated)
+ */
 export const getAllMessages = asyncHandler(
-  async (req: ProtectedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
     const { chatId } = req.params;
-    const currentUser = req.user;
+    const currentUser = getProtectedUser(req);
+
+    if (!chatId) throw new BadRequestError("no chat id provided");
 
     // retrieve the chat of corresponding chatId
     const selectedChat = await chatRepo.getChatByChatId(
@@ -35,12 +48,18 @@ export const getAllMessages = asyncHandler(
       throw new NotFoundError("no chat found to retrieve messages");
     }
 
-    // check for existance of current user in the chats
-    if (selectedChat.participants?.includes(currentUser?._id)) {
+    // check for existence of current user in the chat
+    // FIXED: if currentUser is NOT part of participants -> throw
+    if (
+      !selectedChat.participants?.some(
+        (p: Types.ObjectId | string) =>
+          p.toString() === currentUser?._id.toString()
+      )
+    ) {
       throw new AuthFailureError("you don't own the chat !");
     }
 
-    // get all the messages in aggreated form
+    // get all the messages in aggregated form
     const messages = await messageRepo.getAllMessagesAggregated(
       new Types.ObjectId(chatId)
     );
@@ -49,29 +68,35 @@ export const getAllMessages = asyncHandler(
       throw new InternalError("error while retrieving messages");
     }
 
-    return new SuccessResponse(
-      "messages retrieved successfully",
-      messages
-    ).send(res);
+    return new SuccessResponse("messages retrieved successfully", messages).send(
+      res
+    );
   }
 );
 
-// send a message
+/**
+ * Send a message (with optional attachments)
+ */
 export const sendMessage = asyncHandler(
-  async (req: ProtectedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
     const { content } = req.body;
     const { chatId } = req.params;
 
-    const currentUserId = req.user?._id;
-    const files = (req.files as { attachments?: Express.Multer.File[] }) || {
-      attachments: [],
-    };
+    const currentUserId = getProtectedUser(req)?._id;
+
+    // multer attaches files on req.files (may be array or object)
+    const filesObj =
+      ((req as any).files as { attachments?: Express.Multer.File[] }) || {
+        attachments: [],
+      };
+
+    const attachmentsFiles = filesObj.attachments || [];
 
     if (!chatId) {
-      throw new BadRequestError("no chat  id provided");
+      throw new BadRequestError("no chat id provided");
     }
 
-    if (!content && !files.attachments?.length) {
+    if (!content && attachmentsFiles.length === 0) {
       throw new BadRequestError("no content provided");
     }
 
@@ -80,20 +105,20 @@ export const sendMessage = asyncHandler(
     );
 
     if (!selectedChat) {
-      throw new NotFoundError("No  chat found");
+      throw new NotFoundError("No chat found");
     }
 
-    // hold the files sent by user and creating url to access to it
+    // build attachments with url and localPath
     const attachmentFiles: { url: string; localPath: string }[] = [];
 
-    files.attachments?.forEach((attachment) => {
+    attachmentsFiles.forEach((attachment) => {
       attachmentFiles.push({
         url: getStaticFilePath(attachment.filename),
         localPath: getLocalFilePath(attachment.filename),
       });
     });
 
-    // create a new message with attachmentsFiles
+    // create a new message
     const message = await messageRepo.createMessage(
       new Types.ObjectId(currentUserId),
       new Types.ObjectId(chatId),
@@ -101,13 +126,13 @@ export const sendMessage = asyncHandler(
       attachmentFiles
     );
 
-    // updating the last message of the chat
+    // update the last message of the chat
     const updatedChat = await chatRepo.updateChatFields(
       new Types.ObjectId(chatId),
       { lastMessage: message._id }
     );
 
-    // structure the message
+    // structure the message for response
     const structuredMessage = await messageRepo.getStructuredMessages(
       message._id
     );
@@ -116,7 +141,7 @@ export const sendMessage = asyncHandler(
       throw new InternalError("error creating message: " + message._id);
     }
 
-    // emit socket event to all user to receive current messsage
+    // emit socket event to other participants
     updatedChat.participants.forEach((participantId: Types.ObjectId) => {
       if (participantId.toString() === currentUserId.toString()) return;
 
@@ -135,11 +160,13 @@ export const sendMessage = asyncHandler(
   }
 );
 
-// delete message
+/**
+ * Delete a message
+ */
 export const deleteMessage = asyncHandler(
-  async (req: ProtectedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
     const { messageId } = req.params;
-    const currentUserId = req.user?._id;
+    const currentUserId = getProtectedUser(req)?._id;
 
     if (!messageId) {
       throw new BadRequestError("no message id provided");
@@ -158,26 +185,27 @@ export const deleteMessage = asyncHandler(
     if (!existingChat)
       throw new InternalError("Internal Error: chat not found");
 
-    // if the existing chat participants includes the current userId
+    // ensure current user is a participant of the chat
     if (
       !existingChat?.participants?.some(
-        (participantId) => participantId.toString() === currentUserId.toString()
+        (participantId: Types.ObjectId) =>
+          participantId.toString() === currentUserId.toString()
       )
     ) {
       throw new AuthFailureError("you don't own the message");
     }
 
-    // check if for currentUserId presence in the message sender
+    // ensure current user is the sender of the message
     if (!(existingMessage.sender.toString() === currentUserId.toString()))
       throw new AuthFailureError("you don't own the message ");
 
-    // delete the attachments of the message from the local folder
+    // delete attachments from local folder (if any)
     if (
       existingMessage &&
       existingMessage.attachments &&
       existingMessage.attachments.length > 0
     ) {
-      existingMessage.attachments.forEach(({ localPath }) => {
+      existingMessage.attachments.forEach(({ localPath }: any) => {
         removeLocalFile(localPath);
       });
     }
@@ -188,7 +216,7 @@ export const deleteMessage = asyncHandler(
     if (!deletedMsg)
       throw new InternalError("Internal Error: Couldn't delete message");
 
-    // update the last message of the chat
+    // update the last message of the chat if needed
     let lastMessage: any;
     if (
       existingChat?.lastMessage?.toString() === existingMessage._id.toString()
@@ -197,24 +225,19 @@ export const deleteMessage = asyncHandler(
 
       await chatRepo.updateChatFields(existingChat._id, {
         $set: {
-          lastMessage: lastMessage?._id,
+          lastMessage: lastMessage ? lastMessage._id : null,
         },
       });
     }
 
-    // emit delete message event to all users
+    // emit delete message event to other participants
     existingChat.participants.forEach((participantId: Types.ObjectId) => {
       if (participantId.toString() === currentUserId.toString()) return;
 
-      emitSocketEvent(
-        req,
-        participantId.toString(),
-        ChatEventEnum.MESSAGE_DELETE_EVENT,
-        {
-          messageId: existingMessage._id,
-          // chatLastMessage: lastMessage.content || "attachment",
-        }
-      );
+      emitSocketEvent(req, participantId.toString(), ChatEventEnum.MESSAGE_DELETE_EVENT, {
+        messageId: existingMessage._id,
+        // chatLastMessage: lastMessage?.content || "attachment",
+      });
     });
 
     return new SuccessMsgResponse("message deleted successfully").send(res);

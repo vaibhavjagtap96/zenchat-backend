@@ -1,12 +1,19 @@
-import { Request, Response, NextFunction } from "express";
+// helpers/asyncHandler.ts
+import { Request, Response, NextFunction, RequestHandler } from "express";
 
-type AsyncFunction = (
-  req: Request,
+/**
+ * Generic async handler that allows using custom Request types (like ProtectedRequest)
+ */
+export type AsyncFunction<T extends Request = Request> = (
+  req: T,
   res: Response,
   next: NextFunction
 ) => Promise<any>;
 
-export default (execution: AsyncFunction) =>
-  (req: Request, res: Response, next: NextFunction) => {
-    execution(req, res, next).catch(next);
+export default function asyncHandler<T extends Request = Request>(
+  execution: AsyncFunction<T>
+): RequestHandler {
+  return (req, res, next) => {
+    Promise.resolve(execution(req as T, res, next)).catch(next);
   };
+}
