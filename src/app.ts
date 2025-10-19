@@ -15,7 +15,7 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import { createServer, Server as HttpServer } from "http";
 import { Server as SocketServer } from "socket.io";
-import { initSocketIo, emitSocketEvent } from "./socket";
+import { initSocketIo } from "./socket";
 import path from "path";
 import { RateLimitRequestHandler, rateLimit } from "express-rate-limit";
 import requestIp from "request-ip";
@@ -32,11 +32,9 @@ app.use(requestIp.mw());
 const limiter: RateLimitRequestHandler = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
   max: 200, // Limit each IP to 200 requests per windowMs
-  standardHeaders: true, // Return rate limit info in the 'RateLimit-*' headers
-  legacyHeaders: false, // Disable the 'X-RateLimit-*' headers which were used before
-  keyGenerator: (req: Request, _: Response): string => {
-    return requestIp.getClientIp(req) || ""; // Return the IP address of the client
-  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request): string => requestIp.getClientIp(req) || "",
   handler: (req: Request, res: Response, next: NextFunction, options) => {
     next(
       new RateLimitError(
@@ -48,7 +46,7 @@ const limiter: RateLimitRequestHandler = rateLimit({
   },
 });
 
-// Apply  the rate limiter to all routes
+// Apply the rate limiter to all routes
 app.use(limiter);
 
 // express app middlewares
@@ -64,6 +62,11 @@ app.use(
 app.use(morgan("dev"));
 app.use(cookieParser());
 
+// ✅ Root route (so “Cannot GET /” no longer appears)
+app.get("/", (req, res) => {
+  res.send("🚀 ZenChat Backend Server is Running Successfully!");
+});
+
 // HEALTH CHECK ROUTE
 app.get("/health", (req, res) => {
   res.send("healthy running");
@@ -78,10 +81,10 @@ app.use("/api/chat", chatRoutes);
 // message Routes
 app.use("/api/messages", messageRoutes);
 
-// create a static route to serve static images
+// static images
 app.use("/public", express.static(path.join(__dirname, "..", "public")));
 
-// creating a socket server
+// socket server setup
 const io = new SocketServer(httpServer, {
   pingTimeout: 60000,
   cors: {
@@ -90,10 +93,9 @@ const io = new SocketServer(httpServer, {
   },
 });
 
-// initialize the socker server
+// initialize socket server
 initSocketIo(io);
-
-app.set("io", io); // using set method to mount 'io' instance on app
+app.set("io", io);
 
 // middleware error handlers
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
@@ -101,15 +103,11 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
     ApiError.handle(err, res);
     if (err.type === ErrorType.INTERNAL)
       console.error(
-        `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}` +
-          "\n" +
-          `Error Stack: ${err.stack}`
+        `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}\nError Stack: ${err.stack}`
       );
   } else {
     console.error(
-      `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}` +
-        "\n" +
-        `Error Stack: ${err.stack}`
+      `500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}\nError Stack: ${err.stack}`
     );
     if (environment === "development") {
       return res.status(500).send(err.stack);
