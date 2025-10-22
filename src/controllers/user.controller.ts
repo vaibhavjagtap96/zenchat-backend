@@ -28,10 +28,11 @@ const signUp = asyncHandler(async (req: Request, res: Response) => {
   // create a new user
   const user = await userRepo.create(
     {
+      
       username,
       email,
       password: hashedPassword,
-      avatarUrl: `https://s3bucket.bytenode.xyz/staticbucketstorage/public/images/avatar${
+      avatarUrl: `https://imageserver-vsqa.onrender.com/static/avatars/avatar${
         // random number between 0 and 40
         Math.floor(Math.random() * (40 - 1 + 1)) + 1
       }.avif`,
