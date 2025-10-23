@@ -8,34 +8,39 @@ import bcrypt from "bcrypt";
 import { createTokens } from "./auth/authUtils";
 import { filterUserData } from "../helpers/utils";
 import { SuccessResponse } from "../core/ApiResponse";
-import { cookieValidity, environment, tokenInfo } from "../config";
+import { environment } from "../config";
 
 const signUp = asyncHandler(async (req: Request, res: Response) => {
   const { email, username, password } = req.body;
 
+  // check if email already exists
   const existingUserEmail = await userRepo.findByEmail(email);
   if (existingUserEmail) {
-    throw new BadRequestError("email already exists");
+    throw new BadRequestError("Email already exists");
   }
 
+  // check if username already exists
   const existingUserUsername = await userRepo.findByUsername(username);
   if (existingUserUsername) {
-    throw new BadRequestError("username already exists");
+    throw new BadRequestError("Username already exists");
   }
 
+  // hash password
   const hashedPassword = await bcrypt.hash(password, 10);
+
+  // random avatar number between 1 and 23
+  const avatarNumber = Math.floor(Math.random() * 23) + 1;
+
+  // add leading zero for numbers below 10
+  const formattedNumber = avatarNumber < 10 ? `0${avatarNumber}` : `${avatarNumber}`;
 
   // create a new user
   const user = await userRepo.create(
     {
-      
       username,
       email,
       password: hashedPassword,
-      avatarUrl: `https://imageserver-vsqa.onrender.com/static/avatars/avatar${
-        // random number between 0 and 40
-        Math.floor(Math.random() * (40 - 1 + 1)) + 1
-      }.avif`,
+      avatarUrl: `https://imageserver-1-466g.onrender.com/static/avatars/avatar${formattedNumber}.avif`,
     } as User,
     RoleCode.USER
   );
@@ -43,7 +48,7 @@ const signUp = asyncHandler(async (req: Request, res: Response) => {
   const tokens = await createTokens(user);
   const userData = await filterUserData(user);
 
-  new SuccessResponse("signup successful", {
+  new SuccessResponse("Signup successful", {
     user: userData,
     tokens,
   }).send(res);
@@ -53,14 +58,13 @@ const login = asyncHandler(async (req: Request, res: Response) => {
   const { userId, password } = req.body;
 
   const user = await userRepo.findByEmailOrUsername(userId);
-  if (!user) throw new BadRequestError("invalid email/username");
+  if (!user) throw new BadRequestError("Invalid email/username");
 
-  if (!password) throw new BadRequestError("no credentials provided");
+  if (!password) throw new BadRequestError("No credentials provided");
 
   const match = await bcrypt.compare(password, user.password);
   if (!match) throw new AuthFailureError("Invalid credentials");
 
-  // just renamed the password to pass "password" var is used before
   const { password: pass, status, ...filteredUser } = user;
 
   const tokens = await createTokens(user);
@@ -70,12 +74,12 @@ const login = asyncHandler(async (req: Request, res: Response) => {
     secure: environment === "production",
   };
 
-  // attach the cookies to res object
+  // attach cookies to response
   res
     .cookie("accessToken", tokens.accessToken, options)
     .cookie("refreshToken", tokens.refreshToken, options);
 
-  new SuccessResponse("login successful", {
+  new SuccessResponse("Login successful", {
     user: filteredUser,
     tokens,
   }).send(res);
@@ -89,7 +93,7 @@ const logout = asyncHandler(async (req: Request, res: Response) => {
 
   res.clearCookie("accessToken", options).clearCookie("refreshToken", options);
 
-  new SuccessResponse("logout successful", {}).send(res, {});
+  new SuccessResponse("Logout successful", {}).send(res);
 });
 
 export { signUp, login, logout };
